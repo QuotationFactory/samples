@@ -1,0 +1,187 @@
+﻿@{
+    ViewData["Title"] = "Rhodium24 Event Viewer Sample";
+}
+
+<div>
+    <p style="float: left; font-size: 24px;" class="lead">
+        <img src="/images/rh24_logo.png" height="94" width="180" alt="Rhodium24" />
+        <strong class="text-muted">@ViewData["Title"]</strong>
+    </p>
+</div>
+<div style="clear: both;"></div>
+<hr />
+
+<table>
+    <tr>
+        <td>
+            <p style="float: left;">
+                <button class="btn btn-sm btn-xs" id="clear-events">
+                    <span class="glyphicon glyphicon-trash"></span>
+                    <strong class="text-muted">Clear</strong>
+                </button>
+            </p>
+        </td>
+        <td>&nbsp;</td>
+        <td>
+            <p style="float: left;">
+                <button class="btn btn-sm btn-xs" id="login">
+                    <span class="glyphicon glyphicon-user"></span>
+                    <strong class="text-muted" id="login-name">Login</strong>
+                </button>
+            </p>
+        </td>
+    </tr>
+</table>
+
+<table>
+    <tr>
+        <td>
+            <div class="input-group-sm">
+                <input type="text" class="form-control" placeholder="Your subscription key" id="subscription-key">
+            </div>
+        </td>
+    </tr>
+</table>
+
+<table id="grid-events" class="table table-striped">
+    <thead>
+        <tr>
+            <th>&nbsp;</th>
+            <th>&nbsp;</th>
+            <th>Type</th>
+            <th>Subject</th>
+            <th>Time</th>
+        </tr>
+    </thead>
+    <tbody id="grid-event-details"></tbody>
+</table>
+
+<br />
+<pre id="grid-result"></pre>
+
+<script id="event-template" type="text/x-handlebars-template">
+    <tr data-toggle="collapse" data-target="#event-{{gridEventId}}" class="accordian-toggle">
+        <td>
+            <button class="btn btn-primary btn-xs">
+                <span class="glyphicon glyphicon-eye-open"></span>
+            </button>
+        </td>
+        <td>
+            <button class="btn btn-primary btn-xs" onclick="event.stopPropagation(); getContent('{{gridEventResourceUri}}');">
+                <span class="glyphicon glyphicon-download"></span>
+            </button>
+        </td>
+        <td>{{gridEventType}}</td>
+        <td>{{gridEventSubject}}</td>
+        <td>{{gridEventTime}}</td>
+    </tr>
+    <tr class="hiddenRow collapse" id="event-{{gridEventId}}">
+        <td colspan="12">
+            <div class="accordian-body">
+                <pre><code class="nohighlight">{{gridEvent}}</code></pre>
+            </div>
+        </td>
+    </tr>
+</script>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/styles/default.min.css">
+<script src="https://ajax.aspnetcdn.com/ajax/jquery/jquery-2.2.0.min.js"></script>
+<script src="https://ajax.aspnetcdn.com/ajax/bootstrap/3.3.7/bootstrap.min.js"></script>
+<script src="/js/site.min.js?v=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/aspnet-signalr/1.1.4/signalr.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/highlight.min.js"></script>
+<script>hljs.initHighlightingOnLoad();</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/handlebars.js/2.0.0/handlebars.js"></script>
+<script src="https://cdn.auth0.com/js/auth0/9.11/auth0.min.js"></script>
+<script type="text/javascript">
+    var hubConnection;
+
+    var clear = function () {
+        $("#grid-events").find("tr:gt(0)").remove();
+        $("#grid-events").hide();
+        $("#grid-result").hide();
+        $("#subscription-key").val("");
+    }
+
+    var getContent = function (resourceUri) {
+        var subscriptionKey = $("#subscription-key").val();
+        if (resourceUri && subscriptionKey) {
+            $.ajax({
+                headers: {
+                    "Authorization": `Bearer ${localStorage["atk"]}`
+                },
+                type: "GET",
+                url: `${resourceUri}?subscription-key=${subscriptionKey}`,
+                complete: function (response) {
+                    console.log(response);
+                    $("#grid-result").show();
+                    $("#grid-result").text(response.responseText);
+                }
+            });
+        }
+        else {
+            $("#subscription-key").val("");
+            $("#subscription-key").focus();
+        }
+    }
+
+    var addEvent = function (id, eventType, subject, eventTime, data) {
+        var jsonPayload = JSON.parse(data);
+        var context = {
+            gridEventType: eventType,
+            gridEventSubject: subject,
+            gridEventTime: eventTime,
+            gridEventId: id,
+            gridEvent: data,
+            gridEventResourceUri: jsonPayload.data.resourceUri
+        };
+        var source = document.getElementById("event-template").innerHTML;
+        var template = Handlebars.compile(source);
+        var html = template(context);
+
+        $("#grid-events").show();
+        $('#grid-event-details').prepend(html);
+    }
+
+    var initialize = function () {
+        $("#grid-events").hide();
+        $("#grid-result").hide();
+        var clearEvents = document.getElementById("clear-events");
+        clearEvents.addEventListener("click", function () {
+            clear();
+        });
+
+        var login = document.getElementById("login");
+        login.addEventListener("click", function () {
+            webAuth.popup.authorize({
+                audience: "{audience}",
+                redirectUri: "{redirect URI}",
+                //redirectUri: "https://localhost:44327/auth/callback",
+                responseType: "id_token token",
+                scope: "openid profile email"
+            }, function (err, authResult) {
+                $("#login-name").html(authResult.idTokenPayload.name);
+                localStorage.setItem("atk", authResult.accessToken);
+            });
+        });
+
+        hubConnection = new signalR.HubConnectionBuilder()
+            .withUrl("hubs/gridevents")
+            .configureLogging(signalR.LogLevel.Information)
+            .build();
+
+        hubConnection.start().catch(err => console.error(err.toString()));
+        hubConnection.on("gridupdate", function (id, eventType, subject, eventTime, data) {
+            addEvent(id, eventType, subject, eventTime, data);
+        });
+
+        var webAuth = new auth0.WebAuth({
+            domain: "{domain}",
+            clientID: "{client ID}"
+        });
+    };
+
+    $(document).ready(function () {
+        initialize();
+    });
+</script>
